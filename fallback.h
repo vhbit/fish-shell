@@ -387,35 +387,19 @@ int futimes(int fd, const struct timeval *times);
 
 #endif
 
-#ifndef HAVE_GETTEXT
+/* autoconf may fail to detect gettext (645), so don't define a function call gettext or we'll get build errors */
 
-/**
-   Fallback implementation of gettext. Just returns the original string.
-*/
-char * gettext(const char * msgid);
+/** Cover for gettext() */
+char * fish_gettext(const char * msgid);
 
-/**
-   Fallback implementation of bindtextdomain. Does nothing.
-*/
-char * bindtextdomain(const char * domainname, const char * dirname);
+/** Cover for bindtextdomain() */
+char * fish_bindtextdomain(const char * domainname, const char * dirname);
 
-/**
-   Fallback implementation of textdomain. Does nothing.
-*/
-char * textdomain(const char * domainname);
+/** Cover for textdomain() */
+char * fish_textdomain(const char * domainname);
 
-#endif
-
-#ifndef HAVE_DCGETTEXT
-
-/**
-   Fallback implementation of dcgettext. Just returns the original string.
-*/
-char * dcgettext(const char * domainname,
-                 const char * msgid,
-                 int category);
-
-#endif
+/* Cover for dcgettext */
+char * fish_dcgettext(const char * domainname, const char * msgid, int category);
 
 #ifndef HAVE__NL_MSG_CAT_CNTR
 

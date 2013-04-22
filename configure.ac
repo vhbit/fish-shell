@@ -11,11 +11,6 @@
 
 AC_INIT(fish,2.0.0,fish-users@lists.sf.net)
 
-#
-# preserve configure arguments for xsel. This breaks if arguments 
-# contain whitespace, so don't do that. 
-#
-
 conf_arg=$@
 
 #
@@ -33,11 +28,6 @@ AC_SUBST(LIBS_MIMEDB)
 AC_SUBST(localedir)
 AC_SUBST(optbindirs)
 AC_SUBST(prefix)
-AC_SUBST(XSEL)
-AC_SUBST(XSEL_MAN)
-AC_SUBST(XSEL_BIN)
-AC_SUBST(XSEL_MAN_PATH)
-
 
 
 #
@@ -96,6 +86,17 @@ else
   AC_MSG_RESULT([no])
 fi
 
+#
+# Set up various programs needed for install
+# Note AC_PROG_CXX sets CXXFLAGS if not set, which we want
+# So ensure this happens before we modify CXXFLAGS below
+#
+
+AC_PROG_CXX([g++ c++])
+AC_PROG_CPP
+AC_PROG_INSTALL
+
+echo "CXXFLAGS: $CXXFLAGS"
 
 #
 # Detect directories which may contain additional headers, libraries
@@ -158,37 +159,6 @@ AH_BOTTOM([#if __GNUC__ >= 3
 
 
 #
-# Set up various programs needed for install
-#
-
-AC_PROG_CXX([g++ c++])
-AC_PROG_CPP
-AC_PROG_INSTALL
-
-#
-# Optionally drop xsel command
-#
-
-AC_ARG_WITH(
-  xsel,
-  AC_HELP_STRING(
-    [--without-xsel],
-    [do not build the xsel program needed for X clipboard integration.
-     If build xsel, it will be configured with the same options as fish.]
-  ),
-  [xsel=$withval],
-  [xsel=with_xsel]
-)
-
-if [[ "$xsel" = "with_xsel" ]]; then
-  XSEL=xsel-1.2.0
-  XSEL_BIN=$XSEL/xsel
-  XSEL_MAN=xsel.1x
-  XSEL_MAN_PATH=$XSEL/xsel.1x
-fi
-
-
-#
 # Optionally drop gettext support
 #
 
@@ -204,7 +174,7 @@ AC_ARG_WITH(
 
 AS_IF([test x$local_gettext != xno],
   [ AC_CHECK_PROGS( [found_msgfmt], [msgfmt], [no] )
-    if test x$found_msgfmt!= xno; then
+    if test x$found_msgfmt != xno; then
       AC_DEFINE([USE_GETTEXT],[1],[Perform string translations with gettext])
     elif test "x$local_gettext" != "xcheck" ; then
       AC_MSG_FAILURE([--with-gettext was given, but the msgfmt program could not be found])
@@ -251,6 +221,10 @@ if test "$GCC" = yes; then
       fi
     fi
   fi
+
+  # fish does not use exceptions
+  # Disabling exceptions saves about 20% (!) of the compiled code size
+  CXXFLAGS="$CXXFLAGS -fno-exceptions"
 
 
   #
@@ -917,12 +891,6 @@ if test ! x$local_found_posix_switch = xyes; then
   echo "Some fish features may be disabled."
 fi
 
-if [[ "$xsel" = "with_xsel" ]]; then
-  echo "Now configure xsel with $conf_arg"
-  rm -rf $XSEL
-  tar xf $XSEL.tar.gz
-  cd $XSEL && ./configure $conf_arg
-fi
 echo "fish is now configured."
 echo "Use 'make' and 'make install' to build and install fish."
 

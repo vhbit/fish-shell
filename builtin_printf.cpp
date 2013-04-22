@@ -59,7 +59,7 @@ struct builtin_printf_state_t
     /* The status of the operation */
     int exit_code;
 
-    /* Whether we should stop outputting. This gets set in the case of an error, and also with the \c specifier. */
+    /* Whether we should stop outputting. This gets set in the case of an error, and also with the \c escape. */
     bool early_exit;
 
     builtin_printf_state_t() : exit_code(0), early_exit(false)
@@ -378,10 +378,10 @@ long builtin_printf_state_t::print_esc(const wchar_t *escstart, bool octal_0)
     }
     else
     {
-        this->append_format_output(L"%lc", L'\\');
+        this->append_output(L'\\');
         if (*p)
         {
-            this->append_format_output(L"%lc", *p);
+            this->append_output(*p);
             p++;
         }
     }
@@ -396,7 +396,7 @@ void builtin_printf_state_t::print_esc_string(const wchar_t *str)
         if (*str == L'\\')
             str += print_esc(str, true);
         else
-            this->append_format_output(L"%lc", *str);
+            this->append_output(*str);
 }
 
 /* Evaluate a printf conversion specification.  START is the start of
@@ -420,6 +420,7 @@ void builtin_printf_state_t::print_direc(const wchar_t *start, size_t length, wc
     {
         case L'd':
         case L'i':
+        case L'u':
             fmt.append(L"ll");
             break;
         case L'a':
@@ -433,7 +434,6 @@ void builtin_printf_state_t::print_direc(const wchar_t *start, size_t length, wc
             fmt.append(L"L");
             break;
         case L's':
-        case L'u':
             fmt.append(L"l");
             break;
         default:

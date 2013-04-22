@@ -815,9 +815,6 @@ void reader_init()
 #ifdef VDSUSP
     shell_modes.c_cc[VDSUSP] = _POSIX_VDISABLE;
 #endif
-
-    /* Repaint if necessary before each byte is read. This lets us react immediately to universal variable color changes. */
-    input_common_set_poll_callback(reader_repaint_if_needed);
 }
 
 
@@ -868,12 +865,21 @@ void reader_repaint_if_needed()
     }
 }
 
+static void reader_repaint_if_needed_one_arg(void * unused)
+{
+    reader_repaint_if_needed();
+}
+
 void reader_react_to_color_change()
 {
-    if (data)
+    if (! data)
+        return;
+    
+    if (! data->repaint_needed || ! data->screen_reset_needed)
     {
         data->repaint_needed = true;
         data->screen_reset_needed = true;
+        input_common_add_callback(reader_repaint_if_needed_one_arg, NULL);
     }
 }
 
@@ -999,7 +1005,9 @@ wcstring completion_apply_to_command_line(const wcstring &val_str, complete_flag
 
         if (do_escape)
         {
-            escaped = escape(val, ESCAPE_ALL | ESCAPE_NO_QUOTED);
+            /* Respect COMPLETE_DONT_ESCAPE_TILDES */
+            bool no_tilde = !! (flags & COMPLETE_DONT_ESCAPE_TILDES);
+            escaped = escape(val, ESCAPE_ALL | ESCAPE_NO_QUOTED | (no_tilde ? ESCAPE_NO_TILDE : 0));
             sb.append(escaped);
             move_cursor = wcslen(escaped);
             free(escaped);
@@ -1028,6 +1036,7 @@ wcstring completion_apply_to_command_line(const wcstring &val_str, complete_flag
         wcstring replaced;
         if (do_escape)
         {
+            /* Note that we ignore COMPLETE_DONT_ESCAPE_TILDES here. We get away with this because unexpand_tildes only operates on completions that have COMPLETE_REPLACES_TOKEN set, but we ought to respect them */
             parse_util_get_parameter_info(command_line, cursor_pos, &quote, NULL, NULL);
 
             /* If the token is reported as unquoted, but ends with a (unescaped) quote, and we can modify the command line, then delete the trailing quote so that we can insert within the quotes instead of after them. See https://github.com/fish-shell/fish-shell/issues/552 */
@@ -1292,7 +1301,7 @@ struct autosuggestion_context_t
             return 0;
         }
 
-        while (searcher.go_backwards())
+        while (! reader_thread_job_is_stale() && searcher.go_backwards())
         {
             history_item_t item = searcher.current_item();
 
@@ -1306,8 +1315,11 @@ struct autosuggestion_context_t
                 this->autosuggestion = searcher.current_string();
                 return 1;
             }
-
         }
+
+        /* Maybe cancel here */
+        if (reader_thread_job_is_stale())
+            return 0;
 
         /* Try handling a special command like cd */
         wcstring special_suggestion;
@@ -1316,6 +1328,10 @@ struct autosuggestion_context_t
             this->autosuggestion = special_suggestion;
             return 1;
         }
+        
+        /* Maybe cancel here */
+        if (reader_thread_job_is_stale())
+            return 0;
 
         // Here we do something a little funny
         // If the line ends with a space, and the cursor is not at the end,
@@ -2322,12 +2338,12 @@ void set_env_cmd_duration(struct timeval *after, struct timeval *before)
     }
 }
 
-void reader_run_command(parser_t &parser, const wchar_t *cmd)
+void reader_run_command(parser_t &parser, const wcstring &cmd)
 {
 
     struct timeval time_before, time_after;
 
-    wcstring ft = tok_first(cmd);
+    wcstring ft = tok_first(cmd.c_str());
 
     if (! ft.empty())
         env_set(L"_", ft.c_str(), ENV_GLOBAL);
@@ -2703,7 +2719,7 @@ static void handle_end_loop()
    Read interactively. Read input from stdin while providing editing
    facilities.
 */
-static int read_i()
+static int read_i(void)
 {
     reader_push(L"fish");
     reader_set_complete_function(&complete);
@@ -2718,8 +2734,6 @@ static int read_i()
 
     while ((!data->end_loop) && (!sanity_check()))
     {
-        const wchar_t *tmp;
-
         event_fire_generic(L"fish_prompt");
         if (function_exists(LEFT_PROMPT_FUNCTION_NAME))
             reader_set_left_prompt(LEFT_PROMPT_FUNCTION_NAME);
@@ -2738,9 +2752,7 @@ static int read_i()
           during evaluation.
         */
 
-
-        tmp = reader_readline();
-
+        const wchar_t *tmp = reader_readline();
 
         if (data->end_loop)
         {
@@ -2748,13 +2760,11 @@ static int read_i()
         }
         else if (tmp)
         {
-            tmp = wcsdup(tmp);
-
+            wcstring command = tmp;
             data->buff_pos=0;
             data->command_line.clear();
             data->command_line_changed();
-            reader_run_command(parser, tmp);
-            free((void *)tmp);
+            reader_run_command(parser, command);
             if (data->end_loop)
             {
                 handle_end_loop();
@@ -2831,7 +2841,7 @@ static wchar_t unescaped_quote(const wcstring &str, size_t pos)
 }
 
 
-const wchar_t *reader_readline()
+const wchar_t *reader_readline(void)
 {
     wint_t c;
     int last_char=0;
@@ -3077,6 +3087,9 @@ const wchar_t *reader_readline()
 
                     /* Start the cycle at the beginning */
                     completion_cycle_idx = (size_t)(-1);
+                    
+                    /* Repaint */
+                    reader_repaint_if_needed();
                 }
 
                 break;
@@ -3603,7 +3616,7 @@ static int read_ni(int fd, const io_chain_t &io)
     wchar_t *buff=0;
     std::vector<char> acc;
 
-    int des = fd == 0 ? dup(0) : fd;
+    int des = (fd == STDIN_FILENO ? dup(STDIN_FILENO) : fd);
     int res=0;
 
     if (des == -1)
@@ -3620,17 +3633,27 @@ static int read_ni(int fd, const io_chain_t &io)
             char buff[4096];
             size_t c = fread(buff, 1, 4096, in_stream);
 
-            if (ferror(in_stream) && (errno != EINTR))
+            if (ferror(in_stream))
             {
-                debug(1,
-                      _(L"Error while reading from file descriptor"));
+                if (errno == EINTR)
+                {
+                    /* We got a signal, just keep going. Be sure that we call insert() below because we may get data as well as EINTR. */
+                    clearerr(in_stream);
+                }
+                else if ((errno == EAGAIN || errno == EWOULDBLOCK) && make_fd_blocking(des) == 0)
+                {
+                    /* We succeeded in making the fd blocking, keep going */
+                    clearerr(in_stream);
+                }
+                else
+                {
+                    /* Fatal error */
+                    debug(1, _(L"Error while reading from file descriptor"));
 
-                /*
-                  Reset buffer on error. We won't evaluate incomplete files.
-                */
-                acc.clear();
-                break;
-
+                    /* Reset buffer on error. We won't evaluate incomplete files. */
+                    acc.clear();
+                    break;
+                }
             }
 
             acc.insert(acc.end(), buff, buff + c);
